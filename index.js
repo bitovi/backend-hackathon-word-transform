@@ -1,6 +1,5 @@
 const fs = require('fs')
 const readline = require('readline')
-const { start } = require('repl')
 
 const inputWords = process.argv.slice(2)
 if (inputWords.length !== 2) {
@@ -8,6 +7,10 @@ if (inputWords.length !== 2) {
     process.exit()
 }
 console.log('input words', inputWords)
+const [firstWord, finalWord] = inputWords
+const deadEnds = []
+let deadEndsSkipped = 0
+let nodesProcessed = 0
 
 execute()
 
@@ -22,29 +25,108 @@ async function execute() {
     }
     console.log('validation complete')
 
-    const [start, finish] = inputWords
-    console.log(`initial difference: ${calcDiff(start, finish)}`)
+    const graph = createNode(firstWord, null)
+    processNode(graph)
+}
 
-    const trail = [start]
-    // const blacklist = []
 
-    while(calcDiff(trail.at(-1), finish) > 0) {
-        const scanResult = await findNext(trail.at(-1), finish, trail)
-
-        // if (scanResult === trail.at(-1)){
-        //     const deadEnd = trail.pop()
-        //     blacklist.push(deadEnd)
-        //     console.log(`popping '${deadEnd}'`, trail)
-        //     continue
-        // }
-
-        trail.push(scanResult)
-        console.log(`pushing '${scanResult}'`, trail)
+async function processNode(node) {
+    nodesProcessed++
+    printUpdate(node)
+    if (node.word === finalWord) {
+        console.log('SUCCESS!')
+        printPath(node)
+        process.exit()
     }
 
-    console.log('final result', trail)
+    if (deadEnds.includes(node.word)) {
+        deadEndsSkipped++
+        return
+    }
 
+    if(node.children === null) {
+        await addChildren(node)
+    }
+
+    for(let i = 0; i < node.children.length; i++) {
+        const child = node.children[i]
+        await processNode(child)
+    }
+
+    deadEnds.push(node.word)
 }
+
+async function addChildren(node) {
+    const fileStream = fs.createReadStream('words.txt')
+    const rl = readline.createInterface({
+        input: fileStream,
+        crlfDelay: Infinity
+    })
+    node.children = []
+    for await (const line of rl) {
+        if (calcDiff(node.word, line) === 1) {
+            if (!getPath(node).map(n => n.word).includes(line)) {
+                node.children.push(createNode(line, node))
+            }
+        }
+    }
+    fileStream.destroy()
+
+    // sort ascending, by finalWordDiff
+    node.children.sort((a, b) => {
+        return a.finalWordDiff - b.finalWordDiff
+    })
+}
+
+function createNode(word, parent) {
+    const node = {
+        word,
+        children: null,
+        finalWordDiff: calcDiff(word, finalWord),
+        parent
+    }
+    // console.log('created new node:')
+    // printPath(node)
+    return node
+}
+
+function getPath(node) {
+    if (node === null) {
+        return []
+    }
+    const path = getPath(node.parent)
+    path.push(node)
+    return path
+}
+
+function printPath(node, abridged = false) {
+    const path = getPath(node)
+    console.log(`Printing Path (${path.length} steps)`)
+    formatStep = (step) => console.log(`\t${step.word} - ${step.finalWordDiff}`)
+
+    if (abridged && path.length > 10) {
+        path.slice(0,5).forEach(step => { // first 5
+            formatStep(step)
+        })
+        console.log(`\t...`) // elipsis
+        path.slice(-5).forEach(step => { // last 5
+            formatStep(step)
+        })
+    } else {
+        path.forEach(step => {
+            console.log(`\t${step.word} - ${step.finalWordDiff}`)
+        })
+    }
+}
+
+function printUpdate(currentNode) {
+    console.log('-----------------------------------')
+    console.log(`Nodes Processed: ${nodesProcessed}`)
+    console.log(`Dead Ends: ${deadEnds.length}`)
+    console.log(`Dead Ends Skipped: ${deadEndsSkipped}`)
+    printPath(currentNode, true)
+}
+
 
 async function inputWordIsInvalid(inputWord) {
     const fileStream = fs.createReadStream('words.txt')
@@ -64,44 +146,6 @@ async function inputWordIsInvalid(inputWord) {
     return true
 }
 
-async function findNext(start, finish, currentTrail, targetDiff) {
-    const fileStream = fs.createReadStream('words.txt')
-    const rl = readline.createInterface({
-        input: fileStream,
-        crlfDelay: Infinity
-    })
-
-    const currentDiff = calcDiff(start, finish)
-    if (targetDiff === undefined) {
-        targetDiff = currentDiff - 1
-    }
-
-    let bestSoFar = start
-    let diffOfBestSoFar = currentDiff
-    
-    for await (const line of rl) {
-
-        if (
-            (calcDiff(start, line) === 1) // can only change one thing at a time
-            && (!currentTrail.includes(line)) // don't regress to previous trail steps
-        ) {
-            const newDiff = calcDiff(line, finish)
-            if (newDiff === targetDiff)
-            {
-                bestSoFar = line
-                diffOfBestSoFar = newDiff
-            }
-        }
-    }
-
-    fileStream.destroy()
-    if (bestSoFar === start) {
-        bestSoFar = await findNext(start, finish, currentTrail, targetDiff + 1)
-    }
-
-    return bestSoFar
-}
-
 function calcDiff(wordA, wordB) {
     let diff = 0;
     maxCharLen = Math.max(wordA.length, wordB.length)
@@ -112,4 +156,7 @@ function calcDiff(wordA, wordB) {
     }
     return diff
 }
+
+
+
 
